@@ -1,6 +1,6 @@
 # Question Augmentation Tool
 
-This tool automatically generates question-answer pairs from text documents using the Hugging Face Inference API. It processes text documents, splits them into manageable chunks, and uses a language model to generate relevant Q&A pairs based on the content.
+This tool automatically generates question-answer pairs from text documents using a custom Inference API. It processes text documents, splits them into manageable chunks, and uses a language model to generate relevant Q&A pairs based on the content.
 
 ## Features
 
@@ -35,7 +35,7 @@ This tool automatically generates question-answer pairs from text documents usin
 
 3. Create a `.env` file in the project directory with your Hugging Face API token:
    ```
-   HUGGINGFACE_TOKEN=your_huggingface_token_here
+   JUPITER_ENDPOINT=your_custom_endpoint
    ```
 
 ## Usage
@@ -56,7 +56,6 @@ python question_augmentation.py --input path/to/documents/ --output qa_dataset.j
 
 ### Command-line Options
 
-- `--model`: Hugging Face model name (default: mistralai/Mistral-7B-Instruct-v0.2)
 - `--input`: Path to input document or directory (required)
 - `--output`: Output JSON file path (default: qa_dataset.json)
 - `--pairs-per-chunk`: Number of Q&A pairs to generate per chunk (default: 3)
@@ -65,7 +64,7 @@ python question_augmentation.py --input path/to/documents/ --output qa_dataset.j
 ### Example
 
 ```bash
-python question_augmentation.py --model meta-llama/Llama-2-7b-chat-hf --input documents/ --output my_dataset.json --pairs-per-chunk 5
+python question_augmentation.py --input documents/ --output my_dataset.json --pairs-per-chunk 5
 ```
 
 ## Output Format
@@ -88,13 +87,13 @@ The tool generates a JSON file with the following structure:
 
 ## Troubleshooting
 
-- **Permission Errors**: Make sure your Hugging Face token has the appropriate permissions and the model is accessible.
+- **Permission Errors**: Make sure that you have permission to access the custom endpoint from which the LLM will be inferenced.
 - **Slow Generation**: Some larger models may take time to load. The tool implements a waiting mechanism for this.
 - **JSON Parsing Errors**: The tool includes robust error handling for various formats returned by different models.
 
 ## Recommended Models
 
-If you encounter permission issues, try these publicly available models:
+If you encounter permission issues, try these publicly available Hugging Face models:
 
 - mistralai/Mistral-7B-Instruct-v0.2
 - microsoft/Phi-2
