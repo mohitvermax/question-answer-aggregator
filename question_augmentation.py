@@ -13,73 +13,20 @@ from dotenv import load_dotenv
 
 # Load environment variables from .env file
 load_dotenv()
+JUPITER_ENDPOINT = os.getenv("JUPITER_ENDPOINT")
 
-class HuggingFaceCloudAugmenter:
-    def __init__(self, model_name: str, max_length: int = 1024, retry_count: int = 3):
+class JupiterCloudAugmenter:
+    def __init__(self, max_length: int = 2048, retry_count: int = 3):
         """Initialize the question augmenter using Hugging Face's Inference API.
         
         Args:
-            model_name: Hugging Face model identifier
             max_length: Maximum token length for generation
             retry_count: Number of times to retry failed API calls
         """
-        self.model_name = model_name
         self.max_length = max_length
         self.retry_count = retry_count
-        self.api_url = f"https://api-inference.huggingface.co/models/{model_name}"
+        self.api_url = JUPITER_ENDPOINT
         
-        # Get Hugging Face API token from environment variable
-        self.hf_token = os.getenv("HUGGINGFACE_TOKEN")
-        if not self.hf_token:
-            raise ValueError("HUGGINGFACE_TOKEN not found in environment variables. Please set it in your .env file.")
-        
-        self.headers = {
-            "Authorization": f"Bearer {self.hf_token}",
-            "Content-Type": "application/json"
-        }
-        
-        print(f"Using Hugging Face Inference API with model: {model_name}")
-        
-        # Verify model access
-        self._verify_model_access()
-    
-    def _verify_model_access(self):
-        """Check if the model is accessible with current token."""
-        test_payload = {
-            "inputs": "Hello, world!",
-            "parameters": {"max_new_tokens": 5}
-        }
-        
-        try:
-            response = requests.post(
-                self.api_url,
-                headers=self.headers,
-                json=test_payload,
-                timeout=30
-            )
-            
-            if response.status_code == 403:
-                print(f"WARNING: You don't have permission to access {self.model_name}.")
-                print("This could be due to:")
-                print("1. The model requires special access rights")
-                print("2. Your Hugging Face token doesn't have sufficient permissions")
-                print("3. The model may not be available through the Inference API")
-                print("\nRecommended alternatives:")
-                print("- mistralai/Mistral-7B-Instruct-v0.2")
-                print("- microsoft/Phi-2")
-                print("- tiiuae/falcon-7b-instruct")
-                print("- EleutherAI/gpt-neox-20b")
-                print("- bigscience/bloom-7b1")
-                
-                continue_anyway = input("\nDo you want to continue with the current model anyway? (y/n): ")
-                if continue_anyway.lower() != 'y':
-                    raise ValueError(f"Aborting due to access issues with model {self.model_name}")
-            
-            elif response.status_code == 503:
-                print(f"Model {self.model_name} is loading... Requests during processing will be slower.")
-            
-        except requests.exceptions.RequestException as e:
-            print(f"Warning: Could not verify model access: {e}")
     
     def chunk_document(self, document: str, chunk_size: int = 512) -> List[str]:
         """Split document into manageable chunks based on character count.
@@ -204,7 +151,7 @@ class HuggingFaceCloudAugmenter:
             
         return fixed
     
-    def generate_qa_pairs(self, chunk: str, num_pairs: int = 3) -> List[Dict[str, str]]:
+    def generate_qa_pairs(self, chunk: str, num_pairs: int = 10) -> List[Dict[str, str]]:
         """Generate question-answer pairs from a document chunk using Hugging Face API.
         
         Args:
@@ -215,45 +162,34 @@ class HuggingFaceCloudAugmenter:
             List of dictionaries containing questions and answers
         """
         prompt_template = f"""
-Context:
-{chunk}
+            Context:
+            {chunk}
 
-Task: Based on the context provided above, generate {num_pairs} different question and answer pairs that cover key information. Make questions natural and conversational, as if a user is asking a chatbot.
+            Task: Based on the context provided above, generate {num_pairs} different question and answer pairs that cover key information. Make questions natural and conversational, as if a user is asking a chatbot.
 
-Format your response as JSON with the following structure:
-[
-  {{
-    "question": "Question 1",
-    "answer": "Answer 1"
-  }},
-  ...
-]
-Do not use placeholders like Question 1 and Answer 1 in the json object. The above mentioned structure is for demonstration only. don't return the same .
+            
+            Format your response as an array of JSON dump using the given pydantuc schema:
 
-Return only valid JSON without additional text.
+            class QA(BaseModel):
+                question: str
+                answer: str
 
-JSON Response:
-"""
-        
-        # Prepare request payload
+            Return only valid JSON without additional text.
+
+            JSON Response:
+        """
+
         payload = {
-            "inputs": prompt_template,
-            "parameters": {
-                "max_new_tokens": self.max_length,
-                "do_sample": True,
-                "temperature": 0.7,
-                "top_p": 0.9
-            }
-        }
+            "model": "phi4",
+            "prompt": prompt_template,
+         }
         
         # Try with retries
         for attempt in range(self.retry_count):
             try:
                 response = requests.post(
                     self.api_url, 
-                    headers=self.headers,
                     json=payload,
-                    timeout=120  # 2-minute timeout
                 )
                 
                 # Handle model still loading
@@ -334,7 +270,7 @@ JSON Response:
                 "answer": chunk[:200] + "..." if len(chunk) > 200 else chunk}]
     
     def process_document(self, document_path: str, 
-                         num_pairs_per_chunk: int = 3) -> List[Dict[str, str]]:
+                         num_pairs_per_chunk: int = 15) -> List[Dict[str, str]]:
         """Process a document and generate QA pairs.
         
         Args:
@@ -379,24 +315,7 @@ def save_qa_pairs(qa_pairs: List[Dict[str, str]], output_file: str):
     if not qa_pairs:
         print("Warning: No QA pairs to save.")
         return
-    
-    # Filter out placeholder entries
-    filtered_qa_pairs = []
-    for pair in qa_pairs:
-        question = pair.get("question", "")
-        answer = pair.get("answer", "")
         
-        # Skip entries that contain placeholder text
-        if ("Question " in question and question.strip().isdigit()) or \
-           question == "Question 1" or \
-           answer == "Answer 1" or \
-           (answer.startswith("Answer ") and answer[7:].strip().isdigit()):
-            continue
-            
-        filtered_qa_pairs.append(pair)
-    
-    print(f"Filtered out {len(qa_pairs) - len(filtered_qa_pairs)} placeholder entries")
-    
     existing_data = []
     
     if os.path.exists(output_file):
@@ -404,28 +323,21 @@ def save_qa_pairs(qa_pairs: List[Dict[str, str]], output_file: str):
             with open(output_file, 'r', encoding='utf-8') as file:
                 existing_data = json.load(file)
                 
-            # Also filter existing data to remove placeholders
-            existing_data = [pair for pair in existing_data if 
-                           pair.get("question") != "Question 1" and 
-                           pair.get("answer") != "Answer 1"]
-                
         except json.JSONDecodeError:
             print(f"Warning: Existing file {output_file} contains invalid JSON. Creating new file.")
     
     # Add new QA pairs
-    existing_data.extend(filtered_qa_pairs)
+    existing_data.extend(qa_pairs)
     
     # Save the updated data
     with open(output_file, 'w', encoding='utf-8') as file:
         json.dump(existing_data, file, indent=2, ensure_ascii=False)
     
-    print(f"Saved {len(filtered_qa_pairs)} new QA pairs to {output_file}")
+    print(f"Saved {len(qa_pairs)} new QA pairs to {output_file}")
     print(f"Total QA pairs in file: {len(existing_data)}")
 
 def main():
     parser = argparse.ArgumentParser(description="Generate QA pairs from documents using Hugging Face Inference API")
-    parser.add_argument("--model", type=str, default="mistralai/Mistral-7B-Instruct-v0.2", 
-                       help="Hugging Face model name (default: mistralai/Mistral-7B-Instruct-v0.2)")
     parser.add_argument("--input", type=str, required=True, help="Path to input document or directory")
     parser.add_argument("--output", type=str, default="qa_dataset.json", help="Output JSON file path")
     parser.add_argument("--pairs-per-chunk", type=int, default=3, help="Number of QA pairs per chunk")
@@ -433,7 +345,7 @@ def main():
     
     args = parser.parse_args()
     
-    augmenter = HuggingFaceCloudAugmenter(args.model, retry_count=args.retries)
+    augmenter = JupiterCloudAugmenter(retry_count=args.retries)
     
     if os.path.isdir(args.input):
         # Process all text files in directory
