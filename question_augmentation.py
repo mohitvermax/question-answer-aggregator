@@ -10,78 +10,37 @@ import requests
 import time
 from tqdm import tqdm
 from dotenv import load_dotenv
+import google.generativeai as genai
 
 # Load environment variables from .env file
 load_dotenv()
 
-class HuggingFaceCloudAugmenter:
-    def __init__(self, model_name: str, max_length: int = 1024, retry_count: int = 3):
-        """Initialize the question augmenter using Hugging Face's Inference API.
+class Gemini25Augmenter:
+    def __init__(self, max_length: int = 1024, retry_count: int = 3):
+        """Initialize the question augmenter using Google's Gemini 2.5 API.
         
         Args:
-            model_name: Hugging Face model identifier
             max_length: Maximum token length for generation
             retry_count: Number of times to retry failed API calls
         """
-        self.model_name = model_name
+        self.model_name = "gemini-2.0-flash"
         self.max_length = max_length
         self.retry_count = retry_count
-        self.api_url = f"https://api-inference.huggingface.co/models/{model_name}"
         
-        # Get Hugging Face API token from environment variable
-        self.hf_token = os.getenv("HUGGINGFACE_TOKEN")
-        if not self.hf_token:
-            raise ValueError("HUGGINGFACE_TOKEN not found in environment variables. Please set it in your .env file.")
+        # Get Google Gemini API token from environment variable
+        self.google_api_key = os.getenv("GOOGLE_API_KEY")
+        if not self.google_api_key:
+            raise ValueError("GOOGLE_API_KEY not found in environment variables. Please set it in your .env file.")
         
-        self.headers = {
-            "Authorization": f"Bearer {self.hf_token}",
-            "Content-Type": "application/json"
-        }
+        # Configure the Gemini API
+        genai.configure(api_key=self.google_api_key)
         
-        print(f"Using Hugging Face Inference API with model: {model_name}")
+        # Initialize the model
+        self.model = genai.GenerativeModel(self.model_name)
         
-        # Verify model access
-        self._verify_model_access()
+        print(f"Using Google Gemini 2.5 API")
     
-    def _verify_model_access(self):
-        """Check if the model is accessible with current token."""
-        test_payload = {
-            "inputs": "Hello, world!",
-            "parameters": {"max_new_tokens": 5}
-        }
-        
-        try:
-            response = requests.post(
-                self.api_url,
-                headers=self.headers,
-                json=test_payload,
-                timeout=30
-            )
-            
-            if response.status_code == 403:
-                print(f"WARNING: You don't have permission to access {self.model_name}.")
-                print("This could be due to:")
-                print("1. The model requires special access rights")
-                print("2. Your Hugging Face token doesn't have sufficient permissions")
-                print("3. The model may not be available through the Inference API")
-                print("\nRecommended alternatives:")
-                print("- mistralai/Mistral-7B-Instruct-v0.2")
-                print("- microsoft/Phi-2")
-                print("- tiiuae/falcon-7b-instruct")
-                print("- EleutherAI/gpt-neox-20b")
-                print("- bigscience/bloom-7b1")
-                
-                continue_anyway = input("\nDo you want to continue with the current model anyway? (y/n): ")
-                if continue_anyway.lower() != 'y':
-                    raise ValueError(f"Aborting due to access issues with model {self.model_name}")
-            
-            elif response.status_code == 503:
-                print(f"Model {self.model_name} is loading... Requests during processing will be slower.")
-            
-        except requests.exceptions.RequestException as e:
-            print(f"Warning: Could not verify model access: {e}")
-    
-    def chunk_document(self, document: str, chunk_size: int = 512) -> List[str]:
+    def chunk_document(self, document: str, chunk_size: int = 4000) -> List[str]:
         """Split document into manageable chunks based on character count.
         
         Args:
@@ -204,8 +163,8 @@ class HuggingFaceCloudAugmenter:
             
         return fixed
     
-    def generate_qa_pairs(self, chunk: str, num_pairs: int = 3) -> List[Dict[str, str]]:
-        """Generate question-answer pairs from a document chunk using Hugging Face API.
+    def generate_qa_pairs(self, chunk: str, num_pairs: int = 3000) -> List[Dict[str, str]]:
+        """Generate question-answer pairs from a document chunk using Gemini 2.5 API.
         
         Args:
             chunk: Document chunk text
@@ -218,85 +177,43 @@ class HuggingFaceCloudAugmenter:
 Context:
 {chunk}
 
-Task: Based on the context provided above, generate {num_pairs} different question and answer pairs that cover key information. Make questions natural and conversational, as if a user is asking a chatbot.
+Task: Based on the context provided above, generate {num_pairs} different question and answer pairs that cover key information. The questions should be diverse, covering different aspects of the content, and be natural and conversational, as if a user is asking a chatbot. Include both simple factual questions and more complex analytical questions.
+
+The questions should:
+1. Cover all important facts, concepts, and information in the text
+4. Be clear, specific, and unambiguous
+5. Sound natural, as if asked by a human user
+6. Represent what real users would likely ask about MDGSpace
+7. Focus only on information contained in the context
+
+For answers:
+    1. Provide comprehensive responses based solely on the information in the context
+    2. For questions outside the scope of the provided context, create answers that politely explain the chatbot can only answer queries related to MDGSpace
+    3. Include some examples of "I don't know" or "I can only answer questions about MDGSpace" responses for off-topic questions
+    
 
 Format your response as JSON with the following structure:
 [
   {{
-    "question": "Question 1",
-    "answer": "Answer 1"
+    "question": "Specific question from the content",
+    "answer": "Detailed answer based on the content"
   }},
   ...
 ]
-Do not use placeholders like Question 1 and Answer 1 in the json object. The above mentioned structure is for demonstration only. don't return the same .
 
-Return only valid JSON without additional text.
+Generate exactly {num_pairs} unique question-answer pairs. Return only valid JSON without additional text or explanations outside the JSON structure.
 
 JSON Response:
 """
         
-        # Prepare request payload
-        payload = {
-            "inputs": prompt_template,
-            "parameters": {
-                "max_new_tokens": self.max_length,
-                "do_sample": True,
-                "temperature": 0.7,
-                "top_p": 0.9
-            }
-        }
-        
         # Try with retries
         for attempt in range(self.retry_count):
             try:
-                response = requests.post(
-                    self.api_url, 
-                    headers=self.headers,
-                    json=payload,
-                    timeout=120  # 2-minute timeout
-                )
+                # Generate content with Gemini
+                response = self.model.generate_content(prompt_template)
                 
-                # Handle model still loading
-                if response.status_code == 503:
-                    try:
-                        estimated_time = json.loads(response.content.decode("utf-8")).get("estimated_time", 20)
-                    except:
-                        estimated_time = 20
-                    print(f"Model is loading. Waiting {estimated_time} seconds...")
-                    time.sleep(estimated_time)
-                    continue
-                
-                # Handle other errors
-                if response.status_code != 200:
-                    print(f"API request error: {response.status_code} {response.reason} for url: {self.api_url}")
-                    if attempt < self.retry_count - 1:
-                        wait_time = 2 ** attempt  # Exponential backoff
-                        print(f"Retrying in {wait_time} seconds... (Attempt {attempt + 1}/{self.retry_count})")
-                        time.sleep(wait_time)
-                        continue
-                    return []
-                
-                # Process successful response
-                try:
-                    response_data = response.json()
-                except json.JSONDecodeError:
-                    # Some APIs might not return valid JSON
-                    response_data = response.text
-                
-                # Handle different response formats
-                if isinstance(response_data, list) and len(response_data) > 0:
-                    if isinstance(response_data[0], dict) and "generated_text" in response_data[0]:
-                        generated_text = response_data[0]["generated_text"]
-                    else:
-                        generated_text = str(response_data)
-                elif isinstance(response_data, dict):
-                    if "generated_text" in response_data:
-                        generated_text = response_data["generated_text"]
-                    else:
-                        generated_text = str(response_data)
-                else:
-                    # Some models might return just the generated text directly
-                    generated_text = str(response_data)
+                # Extract text from response
+                generated_text = response.text
                 
                 # Extract QA pairs from the generated text
                 qa_pairs = self.extract_json_from_text(generated_text)
@@ -318,7 +235,7 @@ JSON Response:
                         return [{"question": "What is this text about?", 
                                 "answer": chunk[:200] + "..." if len(chunk) > 200 else chunk}]
                     
-            except requests.exceptions.RequestException as e:
+            except Exception as e:
                 print(f"API request error: {e}")
                 if attempt < self.retry_count - 1:
                     wait_time = 2 ** attempt  # Exponential backoff
@@ -334,7 +251,7 @@ JSON Response:
                 "answer": chunk[:200] + "..." if len(chunk) > 200 else chunk}]
     
     def process_document(self, document_path: str, 
-                         num_pairs_per_chunk: int = 3) -> List[Dict[str, str]]:
+                         num_pairs_per_chunk: int = 1000) -> List[Dict[str, str]]:
         """Process a document and generate QA pairs.
         
         Args:
@@ -423,17 +340,15 @@ def save_qa_pairs(qa_pairs: List[Dict[str, str]], output_file: str):
     print(f"Total QA pairs in file: {len(existing_data)}")
 
 def main():
-    parser = argparse.ArgumentParser(description="Generate QA pairs from documents using Hugging Face Inference API")
-    parser.add_argument("--model", type=str, default="mistralai/Mistral-7B-Instruct-v0.2", 
-                       help="Hugging Face model name (default: mistralai/Mistral-7B-Instruct-v0.2)")
+    parser = argparse.ArgumentParser(description="Generate QA pairs from documents using Google's Gemini 2.5 API")
     parser.add_argument("--input", type=str, required=True, help="Path to input document or directory")
     parser.add_argument("--output", type=str, default="qa_dataset.json", help="Output JSON file path")
-    parser.add_argument("--pairs-per-chunk", type=int, default=3, help="Number of QA pairs per chunk")
+    parser.add_argument("--pairs-per-chunk", type=int, default=1000, help="Number of QA pairs per chunk")
     parser.add_argument("--retries", type=int, default=3, help="Number of retries for failed API calls")
     
     args = parser.parse_args()
     
-    augmenter = HuggingFaceCloudAugmenter(args.model, retry_count=args.retries)
+    augmenter = Gemini25Augmenter(retry_count=args.retries)
     
     if os.path.isdir(args.input):
         # Process all text files in directory
